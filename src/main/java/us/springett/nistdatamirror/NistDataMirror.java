@@ -89,8 +89,7 @@ public class NistDataMirror {
 
     private String getEnvVarOrSysProp(String key) {
         String value = System.getenv(key);
-        if (value != null) return value;
-        return System.getProperty(key);
+        return value != null ? value : System.getProperty(key);
     }
 
     public void handle() {
