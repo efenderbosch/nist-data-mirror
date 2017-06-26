@@ -1,0 +1,33 @@
+service: nist-data-mirror
+
+frameworkVersion: ">=1.15.0"
+
+provider:
+  name: aws
+  runtime: java8
+  region: us-west-2
+  profile: profile-goes-here
+  versionFunctions: true
+  memorySize: 256
+  timeout: 300
+  deploymentBucket: deployment-bucket-goes-here
+
+package:
+  artifact: target/${self:service}.jar
+
+functions:
+  nist-data-mirror:
+    handler: us.springett.nistdatamirror.NistDataMirror::handle
+    name: ${self:service}
+    description: Downloads NIST NVD CVE data feeds and mirrors in S3
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - s3:GetObject
+          - s3:PutObject
+        Resource: "arn:aws:s3:::bucket-name-goes-here/*"
+    environment:
+      S3_BUCKET_NAME: bucket-name-goes-here
+    events:
+      - schedule:
+          rate: rate(6 hours)
