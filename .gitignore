@@ -1,3 +1,6 @@
 .gradle
 .gradletasknamecache
 build/
+.idea
+target
+.serverless

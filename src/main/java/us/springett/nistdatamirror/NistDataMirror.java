@@ -15,19 +15,17 @@
  */
 package us.springett.nistdatamirror;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.Closeable;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
+import com.amazonaws.services.s3.AmazonS3;
+import com.amazonaws.services.s3.AmazonS3ClientBuilder;
+import com.amazonaws.services.s3.model.AmazonS3Exception;
+import com.amazonaws.services.s3.model.ObjectMetadata;
+import com.amazonaws.util.StringUtils;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.zip.GZIPInputStream;
 
 /**
  * This self-contained class can be called from the command-line. It downloads the
@@ -38,38 +36,71 @@ import java.util.zip.GZIPInputStream;
 public class NistDataMirror {
 
     private static final String CVE_XML_12_MODIFIED_URL = "https://nvd.nist.gov/download/nvdcve-Modified.xml.gz";
-    private static final String CVE_XML_20_MODIFIED_URL = "https://nvd.nist.gov/feeds/xml/cve/nvdcve-2.0-Modified.xml.gz";
+    private static final String CVE_XML_20_MODIFIED_URL =
+            "https://nvd.nist.gov/feeds/xml/cve/nvdcve-2.0-Modified.xml.gz";
     private static final String CVE_XML_12_BASE_URL = "https://nvd.nist.gov/download/nvdcve-%d.xml.gz";
     private static final String CVE_XML_20_BASE_URL = "https://nvd.nist.gov/feeds/xml/cve/nvdcve-2.0-%d.xml.gz";
-    private static final String CVE_JSON_10_MODIFIED_URL = "https://static.nvd.nist.gov/feeds/json/cve/1.0/nvdcve-1.0-modified.json.gz";
-    private static final String CVE_JSON_10_BASE_URL = "https://static.nvd.nist.gov/feeds/json/cve/1.0/nvdcve-1.0-%d.json.gz";
-    private static final int START_YEAR = 2002;
-    private static final int END_YEAR = Calendar.getInstance().get(Calendar.YEAR);
-    private File outputDir;
-    private static boolean downloadFailed = false;
+    private static final String CVE_JSON_10_MODIFIED_URL =
+            "https://static.nvd.nist.gov/feeds/json/cve/1.0/nvdcve-1.0-modified.json.gz";
+    private static final String CVE_JSON_10_BASE_URL =
+            "https://static.nvd.nist.gov/feeds/json/cve/1.0/nvdcve-1.0-%d.json.gz";
 
-    public static void main (String[] args) {
-        // Ensure at least one argument was specified
-        if (args.length != 1) {
-            System.out.println("Usage: java NistDataMirror outputDir");
-            return;
+    private final int startYear;
+    private final int endYear;
+    private final File outputDir;
+    private final String s3BucketName;
+    private final AmazonS3 s3 = AmazonS3ClientBuilder.defaultClient();
+
+    public static void main(String[] args) {
+        new NistDataMirror().handle();
+    }
+
+    public NistDataMirror() {
+        s3BucketName = getEnvVarOrSysProp("S3_BUCKET_NAME");
+        if (StringUtils.isNullOrEmpty(s3BucketName)) {
+            throw new IllegalStateException("S3_BUCKET_NAME must be defined as env var or sys prop");
         }
-        NistDataMirror mirror = new NistDataMirror();
-        mirror.setOutputDir(args[0]);
-        mirror.getAllFiles();
-        if (downloadFailed) {
-          System.exit(1);
+
+        if (!s3.doesBucketExist(s3BucketName)) {
+            throw new IllegalStateException("S3 bucket " + s3BucketName + " does not exist");
+        }
+
+        String startYear = getEnvVarOrSysProp("START_YEAR");
+        if (StringUtils.isNullOrEmpty(startYear)) {
+            this.startYear = 2002;
+        } else {
+            this.startYear = Integer.parseInt(startYear);
+        }
+
+        String endYear = getEnvVarOrSysProp("END_YEAR");
+        if (StringUtils.isNullOrEmpty(endYear)) {
+            this.endYear = Calendar.getInstance().get(Calendar.YEAR);
+        } else {
+            this.endYear = Integer.parseInt(endYear);
+        }
+
+        String outputDir = getEnvVarOrSysProp("OUTPUT_DIR");
+        if (StringUtils.isNullOrEmpty(outputDir)) {
+            this.outputDir = setOutputDir("/tmp");
+        } else {
+            this.outputDir = setOutputDir(outputDir);
         }
     }
 
-    private void getAllFiles() {
+    private String getEnvVarOrSysProp(String key) {
+        String value = System.getenv(key);
+        if (value != null) return value;
+        return System.getProperty(key);
+    }
+
+    public void handle() {
         Date currentDate = new Date();
         System.out.println("Downloading files at " + currentDate);
 
         doDownload(CVE_XML_12_MODIFIED_URL);
         doDownload(CVE_XML_20_MODIFIED_URL);
         doDownload(CVE_JSON_10_MODIFIED_URL);
-        for (int i=START_YEAR; i<=END_YEAR; i++) {
+        for (int i = startYear; i <= endYear; i++) {
             String cve12BaseUrl = CVE_XML_12_BASE_URL.replace("%d", String.valueOf(i));
             String cve20BaseUrl = CVE_XML_20_BASE_URL.replace("%d", String.valueOf(i));
             String cveJsonBaseUrl = CVE_JSON_10_BASE_URL.replace("%d", String.valueOf(i));
@@ -79,17 +110,18 @@ public class NistDataMirror {
         }
     }
 
-    public void setOutputDir(String outputDirPath) {
-        outputDir = new File(outputDirPath);
-        if ( ! outputDir.exists()) {
-          outputDir.mkdirs();
+    public File setOutputDir(String outputDirPath) {
+        File outputDir = new File(outputDirPath);
+        if (!outputDir.exists()) {
+            outputDir.mkdirs();
         }
+        return outputDir;
     }
 
     private long checkHead(String cveUrl) {
         try {
             URL url = new URL(cveUrl);
-            HttpURLConnection connection = (HttpURLConnection)url.openConnection();
+            HttpURLConnection connection = (HttpURLConnection) url.openConnection();
             connection.setRequestMethod("HEAD");
             connection.connect();
             connection.getInputStream();
@@ -111,12 +143,10 @@ public class NistDataMirror {
             filename = filename.substring(filename.lastIndexOf('/') + 1);
             file = new File(outputDir, filename).getAbsoluteFile();
 
-            if (file.exists()) {
-                long fileSize = checkHead(cveUrl);
-                if (file.length() == fileSize) {
-                    System.out.println("Using cached version of " + filename);
-                    return;
-                }
+            ObjectMetadata metadata = getS3Metadata(file);
+            if (metadata != null && metadata.getContentLength() == checkHead(cveUrl)) {
+                System.out.println("Using cached version of " + filename);
+                return;
             }
 
             URLConnection connection = url.openConnection();
@@ -132,36 +162,27 @@ public class NistDataMirror {
             success = true;
         } catch (IOException e) {
             System.out.println("Download failed : " + e.getLocalizedMessage());
-            downloadFailed = true;
         } finally {
             close(bis);
             close(bos);
         }
-        if (file != null && success)
-            uncompress(file);
-    }
-
-    public void uncompress(File file) {
-        byte[] buffer = new byte[1024];
-        GZIPInputStream gzis = null;
-        FileOutputStream out = null;
-        try{
-            System.out.println("Uncompressing " + file.getName());
-            gzis = new GZIPInputStream(new FileInputStream(file));
-            out = new FileOutputStream(new File(file.getAbsolutePath().replaceAll(".gz", "")));
-            int len;
-            while ((len = gzis.read(buffer)) > 0) {
-                out.write(buffer, 0, len);
-            }
-        }catch(IOException ex){
-            ex.printStackTrace();
-        } finally {
-            close(gzis);
-            close(out);
+        if (file != null && success) {
+            s3.putObject(s3BucketName, file.getName(), file);
         }
     }
 
-    private void close (Closeable object) {
+    private ObjectMetadata getS3Metadata(File file) {
+        try {
+            return s3.getObjectMetadata(s3BucketName, file.getName());
+        } catch (AmazonS3Exception e) {
+            if (e.getStatusCode() != 404) {
+                throw e;
+            }
+            return null;
+        }
+    }
+
+    private void close(Closeable object) {
         if (object != null) {
             try {
                 object.close();
