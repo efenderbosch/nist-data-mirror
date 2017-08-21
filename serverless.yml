@@ -31,3 +31,10 @@ functions:
     events:
       - schedule:
           rate: rate(6 hours)
+
+resources:
+  Resources:
+    NistDashdataDashmirrorLogGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        RetentionInDays: 30
