@@ -6,7 +6,6 @@ provider:
   name: aws
   runtime: java8
   region: us-west-2
-  profile: profile-goes-here
   versionFunctions: true
   memorySize: 256
   timeout: 300
